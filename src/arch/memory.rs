@@ -1,4 +1,6 @@
 use crate::{alloc, arch, error::Result, pic};
+#[allow(unused_imports)]
+use crate::arch::flush_instruction_cache;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 
@@ -21,6 +23,8 @@ pub fn allocate_pic(
     // Generate code for the obtained address
     let code = emitter.emit(memory.as_ptr() as *const _);
     memory.copy_from_slice(code.as_slice());
+    // On ARM/AArch64 flush I-cache after writing executable code.
+    unsafe { flush_instruction_cache(memory.as_ptr() as *const (), memory.len()) };
     memory
   })
 }

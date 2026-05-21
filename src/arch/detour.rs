@@ -104,6 +104,11 @@ impl Detour {
     // Copy either the detour or the original bytes of the function
     (*self.patcher.get()).toggle(enabled);
     self.enabled.store(enabled, Ordering::SeqCst);
+
+    // On ARM/AArch64 the I-cache is not coherent with D-cache writes.
+    let area = (*self.patcher.get()).area();
+    arch::flush_instruction_cache(area.as_ptr() as *const (), area.len());
+
     Ok(())
   }
 }

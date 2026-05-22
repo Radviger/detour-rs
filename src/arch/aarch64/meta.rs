@@ -1,22 +1,24 @@
 use super::thunk;
 use crate::{error::Result, pic};
 
-/// Trampoline range: absolute jumps reach everything, so use a large value.
-pub const DETOUR_RANGE: usize = 0x7FFF_FFFF_FFFF_FFFF;
+/// Maximum reach of a `B imm26` instruction (±128 MiB).
+pub const DETOUR_RANGE: usize = 0x800_0000;
 
-/// The patcher always uses a 16-byte absolute jump (LDR X16, #8; BR X16; .quad).
+/// Minimum prolog bytes the patcher needs: one 4-byte `B imm26`.
 pub fn prolog_margin(_target: *const ()) -> usize {
-    16
+    4
 }
 
-/// AArch64 absolute jumps reach any address; no relay is ever needed.
-pub fn relay_builder(_target: *const (), _detour: *const ()) -> Result<Option<pic::CodeEmitter>> {
-    Ok(None)
-}
-
-/// Builds a 16-byte absolute-jump emitter from `target` to `detour`.
-pub fn build_jump(detour: *const ()) -> pic::CodeEmitter {
-    let mut emitter = pic::CodeEmitter::new();
-    emitter.add_thunk(thunk::jmp_abs(detour as usize));
-    emitter
+/// Builds a relay when the detour is more than ±128 MiB from the target.
+/// The relay (a 16-byte absolute jump) is allocated close to the target so
+/// the patcher's `B imm26` can always reach it.
+pub fn relay_builder(target: *const (), detour: *const ()) -> Result<Option<pic::CodeEmitter>> {
+    let displacement = (detour as isize).wrapping_sub(target as isize);
+    if !crate::arch::is_within_range(displacement) {
+        let mut emitter = pic::CodeEmitter::new();
+        emitter.add_thunk(thunk::jmp_abs(detour as usize));
+        Ok(Some(emitter))
+    } else {
+        Ok(None)
+    }
 }

@@ -1,6 +1,4 @@
-use super::thunk;
 use crate::error::{Error, Result};
-use crate::pic;
 use std::slice;
 
 pub struct Patcher {
@@ -10,14 +8,17 @@ pub struct Patcher {
 }
 
 impl Patcher {
+    /// `prolog_size` is the number of original bytes disassembled by the
+    /// trampoline builder; the patch itself is always 4 bytes (`B imm26`).
     pub unsafe fn new(
         target: *const (),
         detour: *const (),
         prolog_size: usize,
     ) -> Result<Patcher> {
         let patch_area = Self::patch_area(target, prolog_size)?;
+        let patch_address = patch_area.as_ptr() as *const ();
         let original_prolog = patch_area.to_vec();
-        let detour_prolog = Self::hook_bytes(patch_area.as_ptr() as *const (), detour);
+        let detour_prolog = Self::branch_bytes(patch_address, detour);
         Ok(Patcher { patch_area, original_prolog, detour_prolog })
     }
 
@@ -33,16 +34,14 @@ impl Patcher {
         });
     }
 
-    /// Returns a slice covering the function's patch area (at least `prolog_size` bytes,
-    /// extended by NOP padding to fill a complete 16-byte jump if needed).
     unsafe fn patch_area(target: *const (), prolog_size: usize) -> Result<&'static mut [u8]> {
-        const JUMP_SIZE: usize = 16;
+        const JUMP_SIZE: usize = 4;
 
         if prolog_size >= JUMP_SIZE {
             return Ok(slice::from_raw_parts_mut(target as *mut u8, JUMP_SIZE));
         }
 
-        // Check if trailing NOP/INT3/zero padding can extend the prolog.
+        // Try to extend with NOP/zero padding that follows the prolog.
         let extra = slice::from_raw_parts(
             (target as usize + prolog_size) as *const u8,
             JUMP_SIZE - prolog_size,
@@ -54,21 +53,25 @@ impl Patcher {
         }
     }
 
-    /// Generates the 16-byte absolute-jump patch bytes.
-    fn hook_bytes(_patch_address: *const (), detour: *const ()) -> Vec<u8> {
-        let mut emitter = pic::CodeEmitter::new();
-        emitter.add_thunk(thunk::jmp_abs(detour as usize));
-        emitter.emit(_patch_address)
+    /// Encodes `B offset` from `from` to `to` (4 bytes, ±128 MiB).
+    fn branch_bytes(from: *const (), to: *const ()) -> Vec<u8> {
+        let displacement = (to as isize).wrapping_sub(from as isize);
+        debug_assert!(
+            displacement % 4 == 0,
+            "branch target not 4-byte aligned"
+        );
+        // imm26 is signed, stored as two's complement in 26 bits.
+        let imm26 = (displacement >> 2) as u32 & 0x03FF_FFFF;
+        (0x1400_0000u32 | imm26).to_le_bytes().to_vec()
     }
 
     fn is_code_padding(buf: &[u8]) -> bool {
-        // NOP (0xD503201F as LE bytes), INT3-equivalent (0xCC), or zero bytes
         buf.chunks(4).all(|chunk| {
             if chunk.len() == 4 {
                 let w = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                w == 0xD503_201F || w == 0 || w == 0xCCCC_CCCC
+                w == 0xD503_201F || w == 0 // NOP or zero
             } else {
-                chunk.iter().all(|&b| b == 0x00 || b == 0xCC)
+                chunk.iter().all(|&b| b == 0x00)
             }
         })
     }

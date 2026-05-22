@@ -76,12 +76,14 @@ mod tests {
 
     #[test]
     fn detour_cbz_in_prolog() -> Result<()> {
-        // The very first instruction is CBZ: jumps over mov to the `taken` label.
+        // CBZ is the very first instruction.  We branch on XZR (always 0),
+        // so the branch is unconditionally taken regardless of register state.
+        // This exercises the trampoline's cbz_far expansion path.
         #[unsafe(naked)]
         unsafe extern "C" fn cbz_ret5() -> i32 {
             naked_asm!(
-                "cbz  w0, taken",  // w0 = 0 at entry (no args in caller) → always taken
-                "mov  w0, #2",
+                "cbz  xzr, taken",  // xzr == 0 always → always taken
+                "mov  w0, #2",      // unreachable
                 "ret",
                 "taken:",
                 "mov  w0, #5",
@@ -89,8 +91,6 @@ mod tests {
             );
         }
 
-        // w0 is 0 at entry (no arguments were passed), so CBZ branches
-        // and the function returns 5.
         unsafe { detour_test(cbz_ret5, 5) }
     }
 

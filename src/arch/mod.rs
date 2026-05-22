@@ -18,6 +18,9 @@ cfg_if! {
     } else if #[cfg(target_arch = "arm")] {
         mod arm;
         use self::arm::{Patcher, Trampoline, meta};
+    } else if #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))] {
+        mod riscv;
+        use self::riscv::{Patcher, Trampoline, meta};
     } else {
         compile_error!("detour-rs: unsupported target architecture");
     }
@@ -40,6 +43,8 @@ pub unsafe fn flush_instruction_cache(ptr: *const (), len: usize) {
     cfg_if! {
         if #[cfg(any(target_arch = "arm", target_arch = "aarch64"))] {
             flush_icache_arm(ptr, len);
+        } else if #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))] {
+            flush_icache_riscv(ptr, len);
         } else {
             // x86/x86_64: I-cache coherent with D-cache; nothing needed.
             let _ = (ptr, len);
@@ -57,6 +62,15 @@ unsafe fn flush_icache_arm(ptr: *const (), len: usize) {
 
 #[cfg(all(any(target_arch = "arm", target_arch = "aarch64"), not(target_os = "macos")))]
 unsafe fn flush_icache_arm(ptr: *const (), len: usize) {
+    extern "C" {
+        fn __clear_cache(beg: *const libc::c_char, end: *const libc::c_char);
+    }
+    let end = (ptr as usize + len) as *const libc::c_char;
+    __clear_cache(ptr as *const _, end);
+}
+
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+unsafe fn flush_icache_riscv(ptr: *const (), len: usize) {
     extern "C" {
         fn __clear_cache(beg: *const libc::c_char, end: *const libc::c_char);
     }
